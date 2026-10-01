@@ -142,6 +142,12 @@ export default function App() {
         landfillRate: useBypass ? '68%' : '45%'
       });
 
+      // Build coordinate to ID map for routing
+      const coordToId: Record<string, string> = {};
+      denseCityData.forEach(node => {
+        coordToId[node.coords.join(',')] = node.id;
+      });
+
       const baseNodes = cityMode === 'small' ? smallCityNodes : bigCityNodes;
       const baseRoutes = cityMode === 'small' ? smallCityRoutes : bigCityRoutes;
 
@@ -158,6 +164,24 @@ export default function App() {
         };
       });
 
+      const adjustedLinks = denseRouteData.map(route => {
+        const source = coordToId[route.source_coords.join(',')] || "unknown";
+        const target = coordToId[route.target_coords.join(',')] || "unknown";
+        
+        const dx = route.target_coords[0] - route.source_coords[0];
+        const dz = route.target_coords[2] - route.source_coords[2];
+        const distance_km = Math.max(1, Math.sqrt(dx * dx + dz * dz) / 10);
+        
+        return {
+          ...route,
+          source,
+          target,
+          distance_km,
+          base_emissions_factor: (route.emissions_kg / 500) * emissions
+        };
+      });
+
+      // Include apply_bypass logic if the backend supports it, but GraphPayload only takes nodes and links
       const payload = {
         nodes: adjustedNodes,
         links: baseRoutes,
@@ -168,15 +192,32 @@ export default function App() {
 
       const response = await fetch('http://localhost:8000/api/optimize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true'
+        },
         body: JSON.stringify(payload)
       });
       
       const result = await response.json();
       
-      if (result.status === "success") {
-        setFacilities(result.nodes); 
-        setRoutes(result.links);     
+      if (result.active_routes) {
+        const updatedRoutes = denseRouteData.map(route => {
+          const activeLink = result.active_routes.find((r: any) => r.id === route.id);
+          if (activeLink) {
+            return {
+              ...route,
+              flow_volume: activeLink.flow_volume,
+              is_bottleneck: activeLink.is_bottleneck,
+              emissions_kg: activeLink.emissions
+            };
+          }
+          return { ...route, flow_volume: 0 };
+        });
+        setFacilities(adjustedNodes); 
+        setRoutes(updatedRoutes);     
+      } else if (result.error) {
+        throw new Error(result.error);
       }
     } catch (error) {
       console.error("Backend offline or failed:", error);
@@ -510,5 +551,15 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function App() {
+  const navigate = useNavigate();
+  return (
+    <Routes>
+      <Route path="/" element={<LandingPage onEnter={() => navigate('/dashboard')} />} />
+      <Route path="/dashboard" element={<DashboardApp />} />
+    </Routes>
   );
 }
