@@ -1,8 +1,8 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Html, Grid, Clone, useGLTF } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
-import { AlertTriangle, Factory, Home, Trash2 } from 'lucide-react';
+import { AlertTriangle, Factory, Home, Trash2, ZoomIn, ZoomOut, Hand, MousePointer2, Focus } from 'lucide-react';
 import * as THREE from 'three';
 import type { FacilityData, RouteData } from '../types';
 
@@ -205,6 +205,31 @@ interface UltimateSimCityProps {
 
 // --- MASTER DAYTIME VIEWPORT ---
 const UltimateSimCity: React.FC<UltimateSimCityProps> = ({ facilities, routes, isOptimizing, onNodeClick }) => {
+  const controlsRef = useRef<any>(null);
+  const [isPanMode, setIsPanMode] = useState(false);
+
+  // Math-based Camera Controls
+  const handleZoom = (direction: 'in' | 'out') => {
+    if (controlsRef.current) {
+      const camera = controlsRef.current.object;
+      const target = controlsRef.current.target;
+      const step = direction === 'in' ? 0.3 : -0.4;
+      
+      // Interpolate camera position towards or away from the target
+      camera.position.lerp(target, step);
+      controlsRef.current.update();
+    }
+  };
+
+  const resetCamera = () => {
+    if (controlsRef.current) {
+      const camera = controlsRef.current.object;
+      camera.position.set(140, 120, 140);
+      controlsRef.current.target.set(0, 0, 0);
+      controlsRef.current.update();
+    }
+  };
+
   return (
     <div style={{ width: '100%', height: '100%', filter: isOptimizing ? 'grayscale(60%)' : 'none', transition: 'all 0.3s' }}>
       <Canvas camera={{ position: [140, 120, 140], fov: 35 }} shadows>
@@ -214,7 +239,18 @@ const UltimateSimCity: React.FC<UltimateSimCityProps> = ({ facilities, routes, i
         <ambientLight intensity={0.7} />
         <directionalLight position={[50, 100, 50]} intensity={1.5} color="#ffffff" />
         
-        <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 2.2} />
+        {/* Dynamic Mouse Mapping: Swap between Rotate and Pan based on UI state */}
+        <OrbitControls 
+          ref={controlsRef}
+          makeDefault 
+          minPolarAngle={0} 
+          maxPolarAngle={Math.PI / 2.2}
+          mouseButtons={{
+            LEFT: isPanMode ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+            MIDDLE: THREE.MOUSE.DOLLY,
+            RIGHT: THREE.MOUSE.ROTATE
+          }}
+        />
         
         {/* Crisp Daylight Floor Grid */}
         <Grid 
@@ -245,8 +281,40 @@ const UltimateSimCity: React.FC<UltimateSimCityProps> = ({ facilities, routes, i
         </EffectComposer>
         
       </Canvas>
+
+      {/* MAP NAVIGATION TOOLBAR (Floating Bottom Right) */}
+      <div style={{
+        position: 'absolute', bottom: '30px', right: '30px',
+        display: 'flex', flexDirection: 'column', gap: '8px',
+        background: 'rgba(255, 255, 255, 0.9)', backdropFilter: 'blur(8px)',
+        padding: '8px', borderRadius: '12px', border: '1px solid #e2e8f0',
+        boxShadow: '0 10px 25px rgba(0,0,0,0.1)', zIndex: 10
+      }}>
+        <button onClick={() => handleZoom('in')} title="Zoom In" style={btnStyle}><ZoomIn size={20} color="#0f172a" /></button>
+        <button onClick={() => handleZoom('out')} title="Zoom Out" style={btnStyle}><ZoomOut size={20} color="#0f172a" /></button>
+        <div style={{ width: '100%', height: '1px', background: '#cbd5e1', margin: '4px 0' }} />
+        <button 
+          onClick={() => setIsPanMode(false)} title="Rotate Tool" 
+          style={{ ...btnStyle, background: !isPanMode ? '#e0e7ff' : 'transparent' }}
+        >
+          <MousePointer2 size={20} color={!isPanMode ? '#3b82f6' : '#0f172a'} />
+        </button>
+        <button 
+          onClick={() => setIsPanMode(true)} title="Pan Tool" 
+          style={{ ...btnStyle, background: isPanMode ? '#e0e7ff' : 'transparent' }}
+        >
+          <Hand size={20} color={isPanMode ? '#3b82f6' : '#0f172a'} />
+        </button>
+        <div style={{ width: '100%', height: '1px', background: '#cbd5e1', margin: '4px 0' }} />
+        <button onClick={resetCamera} title="Reset View" style={btnStyle}><Focus size={20} color="#0f172a" /></button>
+      </div>
     </div>
   );
+};
+
+const btnStyle = {
+  background: 'transparent', border: 'none', padding: '8px', borderRadius: '8px',
+  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s'
 };
 
 export default React.memo(UltimateSimCity);
