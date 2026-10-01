@@ -1,143 +1,139 @@
-import { useState, useEffect, useRef } from 'react';
-import SimCityMap from './components/SimCityMap';
+import { useState, useEffect } from 'react';
+import { Settings, Zap, Truck, AlertOctagon } from 'lucide-react';
+import UltimateSimCity from './components/UltimateSimCity';
+import { denseCityData, denseRouteData } from './data';
 import { runSimulation } from './logic';
-import { Factory, Activity } from 'lucide-react';
-import type { FacilityData, RouteData } from './types';
 
-export default function App() {
-  // 1. Inputs
-  const [wasteGeneration, setWasteGeneration] = useState(500);
-  const [sortingCapacity, setSortingCapacity] = useState(300);
-  const [fleetSize, setFleetSize] = useState(20);
+export default function Dashboard() {
+  // --- SCENARIO STATES ---
+  const [traffic, setTraffic] = useState(1.0);
+  const [emissions, setEmissions] = useState(1.0);
+  const [wasteVolume, setWasteVolume] = useState(1.0);
   
-  // 2. Outputs (Map Data)
-  const [mapData, setMapData] = useState<{ facilities: FacilityData[], routes: RouteData[] }>({ facilities: [], routes: [] });
-  
-  // 3. Interaction State
-  const [isOptimizing, setIsOptimizing] = useState(true); // Start true to load initial data
-  const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
-  
-  // Prevent spamming the simulation while dragging the slider
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // --- GRAPH STATES ---
+  const [facilities, setFacilities] = useState(denseCityData);
+  const [routes, setRoutes] = useState(denseRouteData);
+  const [isOptimizing, setIsOptimizing] = useState(false);
 
+  // --- THE FASTAPI CONNECTION ---
   useEffect(() => {
-    // START INTERACTION: Blur map, show terminal
-    setIsOptimizing(true);
-    setTerminalLogs([
-      "Building JSON graph payload...",
-      `Waste: ${wasteGeneration}t | Sorting: ${sortingCapacity}t | Fleet: ${fleetSize}`
-    ]);
+    const runOptimization = async () => {
+      setIsOptimizing(true);
+      try {
+        // Apply the Waste Volume multiplier to the base demand before sending
+        const adjustedNodes = denseCityData.map(node => ({
+          ...node,
+          demand: node.type === 'zone' ? Math.round(-500 * wasteVolume) : 0 // Example base demand
+        }));
 
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        const payload = {
+          nodes: adjustedNodes,
+          links: denseRouteData,
+          global_traffic_multiplier: traffic,
+          global_emissions_factor: emissions
+        };
 
-    // RUN INTERACTION: Fake network delay for the "Hacker" effect
-    timeoutRef.current = setTimeout(() => {
-      setTerminalLogs(prev => [...prev, "POST /api/optimize (Awaiting Python Backend)..."]);
-      
-      setTimeout(() => {
-        // TEMP: Running local simulation until backend is wired up
-        // Note: runSimulation will be replaced by axios.post(payload)
-        const result = runSimulation(wasteGeneration, sortingCapacity, 1.0); // We will update this later to pass the new variables
+        const response = await fetch('http://localhost:8000/api/optimize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
         
-        if (result.hasBottleneck) {
-          setTerminalLogs(prev => [...prev, ` WARNING: Capacity deficit. ${result.spillover}t bypassing to landfill.`]);
-        } else {
-          setTerminalLogs(prev => [...prev, " SUCCESS: Optimal flow achieved. No spillover."]);
+        const result = await response.json();
+        
+        // Update the 3D map with the math engine's results!
+        if (result.status === "success") {
+          setFacilities(result.nodes); 
+          setRoutes(result.links);     
         }
-
-        setTimeout(() => {
-          // END INTERACTION: Update map data, close terminal, unblur map
-          setMapData({ facilities: result.facilities, routes: result.routes });
-          setIsOptimizing(false);
-        }, 800); 
+      } catch (error) {
+        console.error("Backend offline or failed:", error);
         
-      }, 600); 
-    }, 400); 
+        // FALLBACK FOR DEMO: Simulate backend logic locally if FastAPI isn't running
+        // We pass wasteVolume multiplier into our existing mock engine
+        const mockBaseWaste = 5000;
+        const mockResult = runSimulation(mockBaseWaste * wasteVolume, 3500, traffic);
+        setFacilities(mockResult.facilities);
+        setRoutes(mockResult.routes);
+      } finally {
+        setIsOptimizing(false);
+      }
+    };
 
-    return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
-  }, [wasteGeneration, sortingCapacity, fleetSize]);
+    // Debounce the API call slightly so dragging a slider doesn't spam the backend
+    const timeoutId = setTimeout(() => runOptimization(), 300);
+    return () => clearTimeout(timeoutId);
+  }, [traffic, emissions, wasteVolume]);
 
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh', background: '#f8fafc', color: '#0f172a', fontFamily: 'system-ui' }}>
+    <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       
-      {/* SIDEBAR */}
-      <div style={{ width: '360px', padding: '24px', background: 'white', borderRight: '1px solid #e2e8f0', zIndex: 10 }}>
-        <h2><Activity size={24} color="#2563eb" /> Network Optimizer</h2>
-        
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', background: '#f1f5f9', padding: '16px', borderRadius: '12px', marginTop: '20px' }}>
-          
-          <div>
-            <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontWeight: '500', fontSize: '14px' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Factory size={16}/> Panvel Waste Gen</span>
-              <span>{wasteGeneration} t/day</span>
-            </label>
-            <input 
-              type="range" min="100" max="1000" step="50" 
-              value={wasteGeneration} 
-              onChange={(e) => setWasteGeneration(Number(e.target.value))} 
-              style={{ width: '100%' }} 
-            />
-          </div>
+      {/* THE 3D MAP */}
+      <UltimateSimCity 
+        facilities={facilities} 
+        routes={routes} 
+        isOptimizing={isOptimizing} 
+        onNodeClick={(fac) => console.log("Clicked:", fac)}
+      />
 
-          <div>
-            <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontWeight: '500', fontSize: '14px' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Factory size={16}/> Taloja Sorting Max</span>
-              <span>{sortingCapacity} t/day</span>
-            </label>
-            <input 
-              type="range" min="100" max="800" step="50" 
-              value={sortingCapacity} 
-              onChange={(e) => setSortingCapacity(Number(e.target.value))} 
-              style={{ width: '100%' }} 
-            />
-          </div>
-
-          <div>
-            <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontWeight: '500', fontSize: '14px' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Activity size={16}/> Kharghar Fleet Size</span>
-              <span>{fleetSize} Trucks</span>
-            </label>
-            <input 
-              type="range" min="5" max="50" step="1" 
-              value={fleetSize} 
-              onChange={(e) => setFleetSize(Number(e.target.value))} 
-              style={{ width: '100%' }} 
-            />
-          </div>
-
+      {/* THE SCENARIO CONTROL PANEL */}
+      <div style={{
+        position: 'absolute', top: '20px', left: '20px', width: '320px',
+        background: 'rgba(255, 255, 255, 0.95)', backdropFilter: 'blur(10px)',
+        border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px',
+        boxShadow: '0 10px 30px rgba(0,0,0,0.1)', fontFamily: 'system-ui'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
+          <Settings size={20} color="#0f172a" />
+          <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold', color: '#0f172a' }}>What-If Scenarios</h2>
         </div>
-      </div>
 
-      {/* 3D CANVAS AREA */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        
-        {/* TERMINAL OVERLAY */}
+        {/* Traffic Slider */}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: '600', color: '#475569', marginBottom: '8px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Truck size={14}/> Traffic Congestion</span>
+            <span>{traffic.toFixed(1)}x</span>
+          </div>
+          <input 
+            type="range" min="1.0" max="3.0" step="0.1" value={traffic} 
+            onChange={(e) => setTraffic(parseFloat(e.target.value))}
+            style={{ width: '100%', accentColor: '#3b82f6' }}
+          />
+        </div>
+
+        {/* Emissions / Fleet Efficiency Slider */}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: '600', color: '#475569', marginBottom: '8px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Zap size={14}/> Fleet Emissions (EV)</span>
+            <span>{emissions.toFixed(1)}x</span>
+          </div>
+          <input 
+            type="range" min="0.5" max="2.0" step="0.1" value={emissions} 
+            onChange={(e) => setEmissions(parseFloat(e.target.value))}
+            style={{ width: '100%', accentColor: '#10b981' }}
+          />
+        </div>
+
+        {/* Waste Volume Spike Slider */}
+        <div style={{ marginBottom: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: '600', color: '#475569', marginBottom: '8px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><AlertOctagon size={14}/> Festival Waste Spike</span>
+            <span>+{Math.round((wasteVolume - 1) * 100)}%</span>
+          </div>
+          <input 
+            type="range" min="1.0" max="1.5" step="0.05" value={wasteVolume} 
+            onChange={(e) => setWasteVolume(parseFloat(e.target.value))}
+            style={{ width: '100%', accentColor: '#ef4444' }}
+          />
+        </div>
+
         {isOptimizing && (
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-            background: 'rgba(15, 23, 42, 0.95)', border: '1px solid #334155', borderRadius: '8px',
-            padding: '20px', width: '420px', zIndex: 100, color: '#10b981', fontFamily: 'monospace',
-            boxShadow: '0 20px 40px rgba(0,0,0,0.3)', backdropFilter: 'blur(4px)'
-          }}>
-            <div style={{ borderBottom: '1px solid #334155', paddingBottom: '10px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: '#94a3b8' }}>system@optimizer:~#</span>
-              <Activity size={16} className="animate-pulse" />
-            </div>
-            {terminalLogs.map((log, i) => (
-              <div key={i} style={{ marginBottom: '8px', color: log.includes('WARNING') ? '#ef4444' : '#10b981' }}>
-                {'>'} {log}
-              </div>
-            ))}
+          <div style={{ marginTop: '15px', fontSize: '12px', color: '#3b82f6', textAlign: 'center', fontWeight: 'bold' }}>
+            Recalculating Min-Cost Max-Flow...
           </div>
         )}
-
-        {/* 3D MAP */}
-        <SimCityMap 
-          facilities={mapData.facilities} 
-          routes={mapData.routes} 
-          isOptimizing={isOptimizing} 
-        />
       </div>
+
     </div>
   );
 }

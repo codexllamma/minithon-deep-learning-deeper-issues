@@ -15,6 +15,8 @@ export interface RouteData {
   capacity: number;
   is_bottleneck: boolean;
   emissions_kg: number;
+  traffic_multiplier?: number;
+  is_highway?: boolean;
 }
 
 export interface MetricsData {
