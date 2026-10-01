@@ -48,10 +48,11 @@ interface RouteProps {
   isBottleneck: boolean;
   traffic: number;
   isHighway?: boolean;
+  flowVolume: number;
 }
 
 // --- HIGHWAY & LOCAL ROUTE LOGIC ---
-const GridRoute: React.FC<RouteProps> = ({ start, end, isBottleneck, traffic, isHighway }) => {
+const GridRoute: React.FC<RouteProps> = ({ start, end, isBottleneck, traffic, isHighway, flowVolume }) => {
   const truckRef = useRef<any>(null);
   
   // Choose truck and scale road width based on Highway status
@@ -90,19 +91,23 @@ const GridRoute: React.FC<RouteProps> = ({ start, end, isBottleneck, traffic, is
       </mesh>
 
       {/* Glowing Neon Flow Line (Intensity > 1 triggers Bloom) */}
-      <mesh>
-        <tubeGeometry args={[line as any, 20, isBottleneck ? 0.4 : 0.2, 8, false]} />
-        <meshBasicMaterial 
-          color={isBottleneck ? new THREE.Color(4, 0, 0) : new THREE.Color(0, 1.5, 4)} 
-          toneMapped={false} 
-          transparent opacity={0.8}
-        />
-      </mesh>
+      {flowVolume > 0 && (
+        <mesh>
+          <tubeGeometry args={[line as any, 20, isBottleneck ? 0.4 : 0.2, 8, false]} />
+          <meshBasicMaterial 
+            color={isBottleneck ? new THREE.Color(4, 0, 0) : new THREE.Color(0, 1.5, 4)} 
+            toneMapped={false} 
+            transparent opacity={0.8}
+          />
+        </mesh>
+      )}
       
       {/* Animated Truck */}
-      <group ref={truckRef}>
-        <Clone object={truckModel} scale={MODEL_CONFIG.truck.scale} />
-      </group>
+      {flowVolume > 0 && (
+        <group ref={truckRef}>
+          <Clone object={truckModel} scale={MODEL_CONFIG.truck.scale} />
+        </group>
+      )}
     </group>
   );
 };
@@ -272,6 +277,7 @@ const UltimateSimCity: React.FC<UltimateSimCityProps> = ({ facilities, routes, i
             traffic={route.traffic_multiplier || 1.0}
             // Explicit highway flag for styling and truck model
             isHighway={route.is_highway} 
+            flowVolume={route.flow_volume}
           />
         ))}
 

@@ -39,7 +39,8 @@ export default function Dashboard() {
           return {
             ...node,
             demand,
-            capacity
+            capacity,
+            type: node.type === 'landfill' ? 'sink' : node.type
           };
         });
 
@@ -60,10 +61,15 @@ export default function Dashboard() {
           };
         });
 
+        // Only include bypass links if useBypass is active (default false here as it's not a slider)
+        const linksToSend = adjustedLinks.filter(l => !l.id.startsWith('bypass_'));
+
         const payload = {
           nodes: adjustedNodes,
-          links: adjustedLinks
+          links: linksToSend
         };
+
+        console.log("🚀 SENDING PAYLOAD TO BACKEND:", payload);
 
         const response = await fetch('https://factsheet-tradition-giblet.ngrok-free.dev/api/simulate', {
           method: 'POST',
@@ -75,6 +81,7 @@ export default function Dashboard() {
         });
         
         const result = await response.json();
+        console.log("✅ RECEIVED RESULT FROM BACKEND:", result);
         
         // Update the 3D map with the math engine's results!
         if (result.active_routes) {
@@ -90,7 +97,35 @@ export default function Dashboard() {
             }
             return { ...route, flow_volume: 0 };
           });
-          setFacilities(adjustedNodes); 
+
+          // Calculate incoming flow to each node to dynamically update the UI cards
+          const incomingFlowMap: Record<string, number> = {};
+          result.active_routes.forEach((r: any) => {
+            if (r.id.startsWith('fac_limit_')) return; // Avoid double-counting internal abstractions
+            const cleanTarget = r.target.replace(/_IN$|_OUT$/, '');
+            incomingFlowMap[cleanTarget] = (incomingFlowMap[cleanTarget] || 0) + r.flow_volume;
+          });
+
+          const finalNodes = adjustedNodes.map(node => {
+            const flow = incomingFlowMap[node.id] || 0;
+            let utilPercent = node.utilization_percent;
+            let choked = false;
+            
+            if (node.capacity && node.capacity > 0) {
+              utilPercent = (flow / node.capacity) * 100;
+              choked = flow >= node.capacity && utilPercent >= 100;
+            } else if (node.type === 'zone') {
+              utilPercent = 100; 
+            }
+            
+            return {
+              ...node,
+              utilization_percent: utilPercent,
+              is_choked: choked
+            };
+          });
+
+          setFacilities(finalNodes); 
           setRoutes(updatedRoutes);     
         } else if (result.error) {
           throw new Error(result.error);
@@ -101,7 +136,7 @@ export default function Dashboard() {
         // FALLBACK FOR DEMO: Simulate backend logic locally if FastAPI isn't running
         // We pass wasteVolume multiplier into our existing mock engine
         const mockBaseWaste = 5000;
-        const mockResult = runSimulation(mockBaseWaste * wasteVolume, 3500, traffic);
+        const mockResult = runSimulation(mockBaseWaste * wasteVolume, 3500, 2000, traffic, false, 'small');
         setFacilities(mockResult.facilities);
         setRoutes(mockResult.routes);
       } finally {

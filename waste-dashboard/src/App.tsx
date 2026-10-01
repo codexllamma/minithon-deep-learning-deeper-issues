@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { Routes, Route, useNavigate } from 'react-router-dom';
+import LandingPage from './components/LandingPage';
 import { Settings, Zap, Truck, AlertOctagon, Leaf, Lightbulb, Activity, CheckCircle, Play, Loader2, Map, Cpu, X, Maximize2 } from 'lucide-react';
 import UltimateSimCity from './components/UltimateSimCity';
 import { smallCityNodes, smallCityRoutes, bigCityNodes, bigCityRoutes } from './data';
@@ -82,7 +84,7 @@ const NetworkGraph2D = ({ nodes, links, isExpanded = false }: { nodes: FacilityD
 };
 
 
-export default function App() {
+function DashboardApp() {
   // --- UI STATES ---
   const [activeTab, setActiveTab] = useState('simulation');
   const [bypassActive, setBypassActive] = useState(false);
@@ -144,12 +146,12 @@ export default function App() {
 
       // Build coordinate to ID map for routing
       const coordToId: Record<string, string> = {};
-      denseCityData.forEach(node => {
-        coordToId[node.coords.join(',')] = node.id;
-      });
-
       const baseNodes = cityMode === 'small' ? smallCityNodes : bigCityNodes;
       const baseRoutes = cityMode === 'small' ? smallCityRoutes : bigCityRoutes;
+
+      baseNodes.forEach((node: any) => {
+        coordToId[node.coords.join(',')] = node.id;
+      });
 
       const adjustedNodes = baseNodes.map(node => {
         let cap = undefined;
@@ -159,12 +161,13 @@ export default function App() {
         }
         return {
           ...node,
-          demand: node.type === 'zone' ? Math.round(-500 * wasteVolume) : 0,
-          capacity: cap
+          demand: node.type === 'zone' ? Math.round(-500 * wasteVolume) : (node.type === 'landfill' ? 5000 : 0),
+          capacity: cap,
+          type: node.type === 'landfill' ? 'sink' : node.type
         };
       });
 
-      const adjustedLinks = denseRouteData.map(route => {
+      const adjustedLinks = baseRoutes.map((route: any) => {
         const source = coordToId[route.source_coords.join(',')] || "unknown";
         const target = coordToId[route.target_coords.join(',')] || "unknown";
         
@@ -181,10 +184,14 @@ export default function App() {
         };
       });
 
-      // Include apply_bypass logic if the backend supports it, but GraphPayload only takes nodes and links
+      // Only include bypass links if useBypass is active
+      const linksToSend = useBypass 
+        ? adjustedLinks 
+        : adjustedLinks.filter(l => !l.id.startsWith('bypass_'));
+
       const payload = {
         nodes: adjustedNodes,
-        links: baseRoutes,
+        links: linksToSend,
         global_traffic_multiplier: traffic,
         global_emissions_factor: emissions,
         apply_bypass: useBypass
@@ -200,9 +207,10 @@ export default function App() {
       });
       
       const result = await response.json();
+      console.log("✅ RECEIVED RESULT FROM BACKEND:", result);
       
       if (result.active_routes) {
-        const updatedRoutes = denseRouteData.map(route => {
+        const updatedRoutes = baseRoutes.map((route: any) => {
           const activeLink = result.active_routes.find((r: any) => r.id === route.id);
           if (activeLink) {
             return {
@@ -214,7 +222,36 @@ export default function App() {
           }
           return { ...route, flow_volume: 0 };
         });
-        setFacilities(adjustedNodes); 
+
+        // Calculate incoming flow to each node to dynamically update the UI cards
+        const incomingFlowMap: Record<string, number> = {};
+        result.active_routes.forEach((r: any) => {
+          if (r.id.startsWith('fac_limit_')) return; // Avoid double-counting internal abstractions
+          const cleanTarget = r.target.replace(/_IN$|_OUT$/, '');
+          incomingFlowMap[cleanTarget] = (incomingFlowMap[cleanTarget] || 0) + r.flow_volume;
+        });
+
+        const finalNodes = adjustedNodes.map(node => {
+          const flow = incomingFlowMap[node.id] || 0;
+          let utilPercent = node.utilization_percent;
+          let choked = false;
+          
+          if (node.capacity && node.capacity > 0) {
+            utilPercent = (flow / node.capacity) * 100;
+            choked = flow >= node.capacity && utilPercent >= 100;
+          } else if (node.type === 'zone') {
+            // Zones don't have capacity but have demand
+            utilPercent = 100; 
+          }
+          
+          return {
+            ...node,
+            utilization_percent: utilPercent,
+            is_choked: choked
+          };
+        });
+
+        setFacilities(finalNodes); 
         setRoutes(updatedRoutes);     
       } else if (result.error) {
         throw new Error(result.error);
